@@ -22,6 +22,7 @@
     <input id="text" placeholder="Новая заметка" autocomplete="off" required>
     <button type="submit">Добавить</button>
   </form>
+  <div class="meta" id="count"></div>
   <ul id="list"></ul>
 
   <script>
@@ -37,6 +38,8 @@
       document.getElementById("meta").textContent =
         "Окружение: " + info.env + " · API " + info.version + " · интерфейс " + FRONTEND_VERSION;
       const notes = await api("/api/notes");
+      const stats = await api("/api/stats");
+      document.getElementById("count").textContent = "Всего заметок: " + stats.count;
       const list = document.getElementById("list");
       list.innerHTML = "";
       notes.forEach(function (note) {
