@@ -113,7 +113,7 @@ cmd_list() {
     tag="$(env_label "$name" testenv.tag)"
     expires="$(env_label "$name" testenv.expires)"
     left=$(( expires - now ))
-    if (( left > 0 )); then left="$(( left / 60 )) мин"; else left="истёк"; fi
+    if (( left > 0 )); then left="$(( (left + 59) / 60 )) мин"; else left="истёк"; fi
     printf '%-16s %-12s %-8s %-30s\n' "$name" "$tag" "$left" "http://$name.$DOMAIN"
   done < <(list_envs)
 }
@@ -152,5 +152,5 @@ case "${1:-help}" in
   status)  shift; cmd_status "$@" ;;
   destroy) shift; cmd_destroy "$@" ;;
   gc)      cmd_gc ;;
-  *)       sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *)       sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac

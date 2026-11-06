@@ -1,0 +1,62 @@
+name: Preview environment
+
+# Для каждого pull request создаётся отдельное тестовое окружение pr-<номер>.
+# Запуск выполняет self-hosted runner с меткой testenv на сервере платформы TestEnv,
+# где установлены Docker и утилита envctl (доступна в PATH).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+# Новый коммит отменяет предыдущий незавершённый запуск для того же pull request.
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  ENV_NAME: pr-${{ github.event.pull_request.number }}
+  TESTENV_DOMAIN: ${{ vars.TESTENV_DOMAIN || 'test.local' }}
+
+jobs:
+  deploy:
+    # PR из форков не получают окружение: код недоверенный, а runner имеет доступ к Docker
+    if: >-
+      github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, testenv]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Юнит-тесты
+        run: |
+          docker run --rm -v "$PWD/app/api:/srv" -w /srv python:3.12-slim \
+            sh -c "pip install -q --root-user-action=ignore -r requirements.txt pytest && python -m pytest -q"
+
+      - name: Создание или обновление окружения
+        run: |
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          TAG="pr${{ github.event.pull_request.number }}-${HEAD_SHA::7}"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          envctl create "$ENV_NAME" --src "$PWD" --tag "$TAG" --ttl 3d
+
+      - name: Дымовая проверка
+        run: |
+          python3 scripts/smoke.py --url http://127.0.0.1 \
+            --host "$ENV_NAME.$TESTENV_DOMAIN" --expect-version "$TAG"
+
+      - name: Комментарий со ссылкой в pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --body "Тестовое окружение готово: http://$ENV_NAME.$TESTENV_DOMAIN (версия $TAG)"
+
+  teardown:
+    if: github.event.action == 'closed'
+    runs-on: [self-hosted, testenv]
+    steps:
+      - name: Удаление окружения
+        run: envctl destroy "$ENV_NAME" || echo "Окружение $ENV_NAME уже удалено"

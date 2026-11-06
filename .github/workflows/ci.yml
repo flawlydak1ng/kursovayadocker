@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Установка зависимостей
+        run: python3 -m pip install -r app/api/requirements.txt pytest
+      - name: Юнит-тесты
+        run: python3 -m pytest -q
+        working-directory: app/api
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Сборка образов
+        run: |
+          docker build -t notes-api:ci app/api
+          docker build -t notes-frontend:ci app/frontend
+          docker build -t notes-db:ci app/db

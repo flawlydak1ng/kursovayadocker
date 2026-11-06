@@ -1,0 +1,5 @@
+# /etc/cron.d/envctl-gc - автоматическая очистка тестовых окружений с истёкшим TTL
+# Каждые 5 минут envctl удаляет окружения, у которых метка testenv.expires в прошлом.
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+*/5 * * * * root /opt/testenv/platform/bin/envctl gc >> /var/log/envctl-gc.log 2>&1
