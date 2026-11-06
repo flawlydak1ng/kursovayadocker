@@ -1,0 +1,30 @@
+# Платформенный слой TestEnv: единая точка входа для всех тестовых окружений.
+# Запуск: docker compose -f platform/compose.platform.yml up -d
+name: platform
+
+services:
+  traefik:
+    image: traefik:v3.6
+    container_name: testenv-traefik
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=traefik-public
+      - --entrypoints.web.address=:80
+      - --api.dashboard=true
+      - --api.insecure=true
+      - --accesslog=true
+      - --log.level=INFO
+    ports:
+      - "80:80"
+      # панель Traefik доступна только с самого сервера
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - traefik-public
+    restart: unless-stopped
+
+networks:
+  traefik-public:
+    name: traefik-public

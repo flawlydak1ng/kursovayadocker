@@ -1,0 +1,73 @@
+# Шаблон тестового окружения Notes. Один проект Compose = одно окружение.
+# Параметры передаёт envctl через переменные окружения:
+#   ENV_NAME - имя окружения (pr-12), TAG - версия образов, SRC_DIR - каталог с исходниками,
+#   DOMAIN - базовый домен, EXPIRES - время удаления (секунды с 1970 г.).
+
+services:
+  frontend:
+    build:
+      context: ${SRC_DIR:-.}/app/frontend
+      args:
+        APP_VERSION: ${TAG:-dev}
+    image: notes-frontend:${TAG:-dev}
+    depends_on:
+      - api
+    networks:
+      - default
+      - traefik-public
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+    labels:
+      - testenv.name=${ENV_NAME:-demo}
+      - testenv.tag=${TAG:-dev}
+      - testenv.expires=${EXPIRES:-0}
+      - traefik.enable=true
+      - traefik.docker.network=traefik-public
+      - traefik.http.routers.${ENV_NAME:-demo}.rule=Host(`${ENV_NAME:-demo}.${DOMAIN:-test.local}`)
+      - traefik.http.routers.${ENV_NAME:-demo}.entrypoints=web
+      - traefik.http.services.${ENV_NAME:-demo}.loadbalancer.server.port=80
+
+  api:
+    build:
+      context: ${SRC_DIR:-.}/app/api
+      args:
+        APP_VERSION: ${TAG:-dev}
+    image: notes-api:${TAG:-dev}
+    environment:
+      DATABASE_URL: postgresql://notes:notes@db:5432/notes
+      ENV_NAME: ${ENV_NAME:-demo}
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 192M
+    labels:
+      - testenv.name=${ENV_NAME:-demo}
+
+  db:
+    build:
+      context: ${SRC_DIR:-.}/app/db
+    image: notes-db:${TAG:-dev}
+    environment:
+      POSTGRES_USER: notes
+      POSTGRES_PASSWORD: notes
+      POSTGRES_DB: notes
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notes -d notes"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    labels:
+      - testenv.name=${ENV_NAME:-demo}
+
+networks:
+  traefik-public:
+    external: true

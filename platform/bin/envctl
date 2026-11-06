@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# envctl - управление тестовыми средами платформы TestEnv.
+# Одно окружение = один проект Docker Compose с именем te-<имя>.
+#
+# Команды:
+#   envctl create <имя> --src <каталог> [--tag <тег>] [--ttl 4h]   создать или обновить окружение
+#   envctl list                                                    список окружений
+#   envctl status <имя>                                            состояние контейнеров
+#   envctl destroy <имя>                                           удалить окружение
+#   envctl gc                                                      удалить окружения с истёкшим TTL
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+TEMPLATE="${TESTENV_TEMPLATE:-$ROOT/templates/compose.testenv.yml}"
+DOMAIN="${TESTENV_DOMAIN:-test.local}"
+DEFAULT_TTL="${TESTENV_TTL:-4h}"
+MAX_ENVS="${TESTENV_MAX_ENVS:-8}"
+ENTRY="${TESTENV_ENTRY:-http://127.0.0.1}"
+READY_TIMEOUT="${TESTENV_READY_TIMEOUT:-120}"
+PREFIX="te-"
+
+log() { echo "[$(date +%T)] $*"; }
+die() { echo "envctl: $*" >&2; exit 1; }
+
+project() { echo "${PREFIX}$1"; }
+
+check_name() {
+  [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$ ]] \
+    || die "недопустимое имя '$1': строчные латинские буквы, цифры и дефис, до 30 символов"
+}
+
+ttl_seconds() {
+  [[ "$1" =~ ^([0-9]+)([smhd])$ ]] || die "некорректный TTL '$1' (примеры: 30m, 4h, 2d)"
+  local n="${BASH_REMATCH[1]}"
+  case "${BASH_REMATCH[2]}" in
+    s) echo "$n" ;;
+    m) echo $((n * 60)) ;;
+    h) echo $((n * 3600)) ;;
+    d) echo $((n * 86400)) ;;
+  esac
+}
+
+# имена существующих окружений
+list_envs() {
+  docker ps -a --filter "label=testenv.expires" --format '{{.Label "testenv.name"}}' | sort -u
+}
+
+# значение метки окружения (метки есть у контейнера frontend)
+env_label() {
+  docker ps -a --filter "label=testenv.name=$1" --filter "label=testenv.expires" \
+    --format "{{.Label \"$2\"}}" | head -n 1
+}
+
+env_exists() { [[ -n "$(env_label "$1" testenv.name)" ]]; }
+
+compose() {
+  local name="$1"; shift
+  docker compose -p "$(project "$name")" -f "$TEMPLATE" "$@"
+}
+
+http_code() {
+  curl -s -o /dev/null -w '%{http_code}' -H "Host: $1.$DOMAIN" "$ENTRY/api/health" || true
+}
+
+wait_ready() {
+  local name="$1" deadline=$(( $(date +%s) + READY_TIMEOUT ))
+  until [[ "$(http_code "$name")" == "200" ]]; do
+    (( $(date +%s) < deadline )) || die "окружение $name не стало доступным за ${READY_TIMEOUT} с"
+    sleep 1
+  done
+}
+
+cmd_create() {
+  local name="${1:-}" src="" tag="" ttl="$DEFAULT_TTL"
+  [[ -n "$name" ]] || die "укажите имя окружения"
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --src) src="${2:-}"; shift 2 ;;
+      --tag) tag="${2:-}"; shift 2 ;;
+      --ttl) ttl="${2:-}"; shift 2 ;;
+      *) die "неизвестный параметр: $1" ;;
+    esac
+  done
+  check_name "$name"
+  [[ -d "$src/app" ]] || die "--src должен указывать на каталог с исходниками (внутри каталог app)"
+  [[ -n "$tag" ]] || tag="$(git -C "$src" rev-parse --short HEAD 2>/dev/null || echo dev)"
+  local secs; secs="$(ttl_seconds "$ttl")"
+
+  if ! env_exists "$name" && (( $(list_envs | wc -l) >= MAX_ENVS )); then
+    die "достигнут лимит окружений ($MAX_ENVS), удалите ненужные: envctl destroy <имя>"
+  fi
+  docker network inspect traefik-public >/dev/null 2>&1 \
+    || die "сеть traefik-public не найдена: сначала запустите платформу (compose.platform.yml)"
+
+  export ENV_NAME="$name" TAG="$tag" SRC_DIR="$(readlink -f "$src")" DOMAIN
+  export EXPIRES=$(( $(date +%s) + secs ))
+  log "создаю окружение $name (версия $tag, TTL $ttl)"
+  local t0; t0="$(date +%s.%N)"
+  compose "$name" up -d --build --remove-orphans
+  wait_ready "$name"
+  local t1; t1="$(date +%s.%N)"
+  awk -v a="$t0" -v b="$t1" -v n="$name" -v d="$DOMAIN" \
+    'BEGIN { printf "готово за %.1f с: http://%s.%s\n", b - a, n, d }'
+}
+
+cmd_list() {
+  printf '%-16s %-12s %-8s %-30s\n' NAME VERSION TTL URL
+  local name now; now="$(date +%s)"
+  while read -r name; do
+    [[ -n "$name" ]] || continue
+    local tag expires left
+    tag="$(env_label "$name" testenv.tag)"
+    expires="$(env_label "$name" testenv.expires)"
+    left=$(( expires - now ))
+    if (( left > 0 )); then left="$(( left / 60 )) мин"; else left="истёк"; fi
+    printf '%-16s %-12s %-8s %-30s\n' "$name" "$tag" "$left" "http://$name.$DOMAIN"
+  done < <(list_envs)
+}
+
+cmd_status() {
+  local name="${1:-}"; [[ -n "$name" ]] || die "укажите имя окружения"
+  env_exists "$name" || die "окружение $name не найдено"
+  compose "$name" ps
+}
+
+cmd_destroy() {
+  local name="${1:-}"; [[ -n "$name" ]] || die "укажите имя окружения"
+  env_exists "$name" || die "окружение $name не найдено"
+  log "удаляю окружение $name"
+  compose "$name" down --volumes --remove-orphans
+  log "окружение $name удалено"
+}
+
+cmd_gc() {
+  local name expires now removed=0; now="$(date +%s)"
+  while read -r name; do
+    [[ -n "$name" ]] || continue
+    expires="$(env_label "$name" testenv.expires)"
+    if (( expires <= now )); then
+      log "TTL окружения $name истёк"
+      cmd_destroy "$name"
+      removed=$((removed + 1))
+    fi
+  done < <(list_envs)
+  log "gc завершён, удалено окружений: $removed"
+}
+
+case "${1:-help}" in
+  create)  shift; cmd_create "$@" ;;
+  list)    cmd_list ;;
+  status)  shift; cmd_status "$@" ;;
+  destroy) shift; cmd_destroy "$@" ;;
+  gc)      cmd_gc ;;
+  *)       sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//' ;;
+esac

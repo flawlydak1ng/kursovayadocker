@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Notes</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; color: #222; }
+    h1 { margin-bottom: 4px; }
+    .meta { color: #666; font-size: 14px; margin-bottom: 24px; }
+    form { display: flex; gap: 8px; margin-bottom: 16px; }
+    input { flex: 1; padding: 8px; font-size: 16px; }
+    button { padding: 8px 14px; font-size: 16px; cursor: pointer; }
+    ul { list-style: none; padding: 0; }
+    li { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #ddd; }
+  </style>
+</head>
+<body>
+  <h1>Заметки</h1>
+  <div class="meta" id="meta">загрузка...</div>
+  <form id="form">
+    <input id="text" placeholder="Новая заметка" autocomplete="off" required>
+    <button type="submit">Добавить</button>
+  </form>
+  <ul id="list"></ul>
+
+  <script>
+    const FRONTEND_VERSION = "__VERSION__";
+
+    async function api(path, options) {
+      const response = await fetch(path, options);
+      return response.status === 204 ? null : response.json();
+    }
+
+    async function refresh() {
+      const info = await api("/api/version");
+      document.getElementById("meta").textContent =
+        "Окружение: " + info.env + " · API " + info.version + " · интерфейс " + FRONTEND_VERSION;
+      const notes = await api("/api/notes");
+      const list = document.getElementById("list");
+      list.innerHTML = "";
+      notes.forEach(function (note) {
+        const item = document.createElement("li");
+        const label = document.createElement("span");
+        label.textContent = note.text;
+        const remove = document.createElement("button");
+        remove.textContent = "Удалить";
+        remove.onclick = async function () {
+          await api("/api/notes/" + note.id, { method: "DELETE" });
+          refresh();
+        };
+        item.append(label, remove);
+        list.append(item);
+      });
+    }
+
+    document.getElementById("form").onsubmit = async function (event) {
+      event.preventDefault();
+      const input = document.getElementById("text");
+      await api("/api/notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: input.value })
+      });
+      input.value = "";
+      refresh();
+    };
+
+    refresh();
+  </script>
+</body>
+</html>
