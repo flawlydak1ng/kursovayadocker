@@ -84,6 +84,10 @@ def create_app(repo=None):
     def list_notes():
         return jsonify(repo.list())
 
+    @app.get("/api/stats")
+    def stats():
+        return jsonify(count=len(repo.list()))
+
     @app.post("/api/notes")
     def add_note():
         payload = request.get_json(silent=True) or {}

@@ -28,6 +28,13 @@ def test_add_and_list_note(client):
     assert notes == [{"id": 1, "text": "первая заметка"}]
 
 
+def test_stats_counts_notes(client):
+    assert client.get("/api/stats").get_json() == {"count": 0}
+    client.post("/api/notes", json={"text": "a"})
+    client.post("/api/notes", json={"text": "b"})
+    assert client.get("/api/stats").get_json() == {"count": 2}
+
+
 def test_empty_text_is_rejected(client):
     response = client.post("/api/notes", json={"text": "   "})
     assert response.status_code == 400
